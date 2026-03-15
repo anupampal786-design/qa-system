@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>CS VASC · QA Feedback Studio</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#07111f;font-family:'Outfit',sans-serif;}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px;}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes ping{0%{transform:scale(1);opacity:.8}100%{transform:scale(2.2);opacity:0}}
+@keyframes pulseRed{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}50%{box-shadow:0 0 0 12px rgba(239,68,68,0)}}
+@keyframes popIn{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.15)}100%{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef}=React;
+
+const PARAMS=[
+  {id:"greeting",label:"Greeting & Opening",icon:"👋",desc:"Professional intro, brand & agent name"},
+  {id:"auth",label:"Authentication",icon:"🔐",desc:"Verified caller identity per protocol"},
+  {id:"rapport",label:"Rapport Building",icon:"🤝",desc:"Warm, personalized engagement"},
+  {id:"empathy",label:"Empathy",icon:"❤️",desc:"Concern-specific acknowledgment"},
+  {id:"hold",label:"Hold Procedure",icon:"⏸️",desc:"Permission, reason & thank you"},
+  {id:"deadair",label:"Dead Air Management",icon:"🔇",desc:"Kept customer informed"},
+  {id:"grammar",label:"Grammar & Communication",icon:"💬",desc:"Clear, professional language"},
+  {id:"caseid",label:"Case ID / Documentation",icon:"📋",desc:"Shared case/ticket ID"},
+  {id:"tat",label:"TAT Adherence",icon:"⏱️",desc:"Resolved within turnaround time"},
+  {id:"closure",label:"Closure Confirmation",icon:"✅",desc:'"Have I answered all your questions today?"'},
+];
+const SCORE_OPTS=[
+  {v:"pass",l:"Pass",c:"#10b981",bg:"#d1fae5",bdr:"#6ee7b7",dk:"#065f46"},
+  {v:"partial",l:"Partial",c:"#f59e0b",bg:"#fef3c7",bdr:"#fcd34d",dk:"#92400e"},
+  {v:"fail",l:"Fail",c:"#ef4444",bg:"#fee2e2",bdr:"#fca5a5",dk:"#991b1b"},
+  {v:"na",l:"N/A",c:"#6b7280",bg:"#f3f4f6",bdr:"#d1d5db",dk:"#374151"},
+];
+const CONTACT_TYPES=[{id:"call",label:"📞 Call"},{id:"chat",label:"💬 Chat"},{id:"email",label:"📧 Email"}];
+const SEED_USERS=[
+  {id:"u_admin",name:"Admin",role:"admin"},
+  {id:"u_anupam",name:"Anupam",role:"supervisor"},
+  {id:"u_tammy",name:"Tammy",role:"agent"},
+  {id:"u_sandra",name:"Sandra",role:"agent"},
+  {id:"u_anees",name:"Anees",role:"agent"},
+  {id:"u_melvin",name:"Melvin",role:"agent"},
+  {id:"u_roger",name:"Roger",role:"agent"},
+  {id:"u_tamina",name:"Tamina",role:"agent"},
+];
+const SEED_ASSIGN={u_anupam:["u_tammy","u_sandra","u_anees","u_melvin","u_roger","u_tamina"]};
+const BADGE_DEFS=[
+  {id:"first_eval",icon:"🌟",label:"First Eval",desc:"Completed your first QA evaluation",check:(e)=>e.length>=1},
+  {id:"perfect_score",icon:"💎",label:"Perfect Score",desc:"Scored 100% in an evaluation",check:(e)=>e.some(x=>x.qs===100)},
+  {id:"on_fire",icon:"🔥",label:"On Fire",desc:"Scored 80%+ three times in a row",check:(e)=>{const l=e.slice(0,3);return l.length===3&&l.every(x=>x.qs>=80);}},
+  {id:"clean_sheet",icon:"✨",label:"Clean Sheet",desc:"Zero fails in an evaluation",check:(e)=>e.some(x=>x.failed===0&&x.qs>0)},
+  {id:"most_improved",icon:"📈",label:"Most Improved",desc:"Score improved 20%+ vs previous",check:(e)=>{if(e.length<2)return false;return(e[0].qs-e[1].qs)>=20;}},
+  {id:"consistent",icon:"🏆",label:"Consistent",desc:"5 evaluations all above 75%",check:(e)=>{const l=e.slice(0,5);return l.length===5&&l.every(x=>x.qs>=75);}},
+  {id:"acknowledged",icon:"📬",label:"Prompt Reader",desc:"Acknowledged feedback within 10 minutes",check:(e)=>e.some(x=>x.ackTime&&x.ackTime<10)},
+];
+
+const DB={
+  async get(k){try{const r=localStorage.getItem(k);return r?JSON.parse(r):null;}catch{return null;}},
+  async set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}},
+};
+const uid=()=>`${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+const calcQS=(s)=>{const v=Object.values(s);const a=v.filter(x=>x!=="na").length;if(!a)return 0;return Math.round((v.filter(x=>x==="pass").length/a)*100);};
+const qs2c=(q)=>q>=80?"#10b981":q>=60?"#f59e0b":"#ef4444";
+const qs2bg=(q)=>q>=80?"#d1fae5":q>=60?"#fef3c7":"#fee2e2";
+const qs2l=(q)=>q>=80?"Good":q>=60?"Needs Work":"Critical";
+const T={d:"'Cormorant Garamond',serif",b:"'Outfit',sans-serif"};
+
+function detectTrends(evals){
+  if(evals.length<3)return[];
+  const flags=[];
+  PARAMS.forEach(p=>{
+    const last5=evals.slice(0,5);
+    const fails=last5.filter(e=>e.scores&&(e.scores[p.id]==="fail"||e.scores[p.id]==="partial")).length;
+    if(fails>=3)flags.push({param:p,count:fails,total:last5.length});
+  });
+  return flags;
+}
+function calcBadges(evals){return BADGE_DEFS.filter(b=>b.check(evals)).map(b=>b.id);}
+
+// ── SHARED UI ──
+function TopBar({title,subtitle,user,onLogout,badge}){
+  return(
+    <div style={{background:"rgba(0,0,0,.28)",backdropFilter:"blur(14px)",borderBottom:"1px solid rgba(255,255,255,.07)",padding:".8rem 1.6rem",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:".5rem",position:"sticky",top:0,zIndex:100}}>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{background:"linear-gradient(135deg,#c8a96e,#e8c97e)",borderRadius:8,padding:"4px 12px",fontSize:".62rem",fontWeight:700,color:"#1e3a5f",letterSpacing:"2px",textTransform:"uppercase"}}>CS VASC</div>
+        <div>
+          <div style={{color:"#fff",fontWeight:700,fontFamily:T.d,fontSize:"1.05rem",lineHeight:1.2}}>{title}</div>
+          <div style={{color:"#64748b",fontSize:".7rem"}}>{subtitle}</div>
+        </div>
+        {badge}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{color:"#64748b",fontSize:".78rem"}}>👤 {user.name}</div>
+        <button onClick={onLogout} style={{background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",color:"#fca5a5",borderRadius:8,padding:"5px 12px",fontSize:".72rem",fontWeight:600,cursor:"pointer"}}>Logout</button>
+      </div>
+    </div>
+  );
+}
+const Card=({children,style={}})=><div style={{background:"rgba(255,255,255,.97)",borderRadius:18,padding:"1.3rem",boxShadow:"0 12px 48px rgba(0,0,0,.32)",...style}}>{children}</div>;
+const STitle=({children,sub})=><div style={{marginBottom:"1rem"}}><div style={{fontFamily:T.d,color:"#1e3a5f",fontSize:"1.1rem",fontWeight:700,lineHeight:1.2}}>{children}</div>{sub&&<div style={{color:"#94a3b8",fontSize:".7rem",marginTop:2}}>{sub}</div>}</div>;
+const Lbl=({children})=><label style={{fontSize:".67rem",fontWeight:600,color:"#64748b",letterSpacing:"1.2px",textTransform:"uppercase",display:"block",marginBottom:5}}>{children}</label>;
+const Inp=(props)=><input {...props} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:9,padding:"9px 11px",fontSize:".85rem",outline:"none",background:"#f8fafc",boxSizing:"border-box",...props.style}}/>;
+const Sel=({children,...props})=><select {...props} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:9,padding:"9px 11px",fontSize:".85rem",outline:"none",background:"#f8fafc",boxSizing:"border-box",...props.style}}>{children}</select>;
+const GoldBtn=({children,onClick,disabled,style={}})=><button onClick={onClick} disabled={disabled} style={{background:disabled?"#e2e8f0":"linear-gradient(135deg,#c8a96e,#e8c97e)",border:"none",color:disabled?"#9ca3af":"#1e3a5f",borderRadius:10,padding:"9px 20px",fontWeight:700,fontSize:".85rem",cursor:disabled?"not-allowed":"pointer",whiteSpace:"nowrap",boxShadow:disabled?"none":"0 4px 16px rgba(200,169,110,.3)",...style}}>{children}</button>;
+const Tabs=({tabs,active,onChange})=><div style={{display:"flex",gap:6,marginBottom:"1.3rem",flexWrap:"wrap"}}>{tabs.map(([t,l])=><button key={t} onClick={()=>onChange(t)} style={{padding:"7px 16px",borderRadius:9,border:"none",background:active===t?"rgba(200,169,110,.9)":"rgba(255,255,255,.07)",color:active===t?"#1e3a5f":"#94a3b8",fontWeight:600,fontSize:".8rem",cursor:"pointer"}}>{l}</button>)}</div>;
+
+// ── KEY SETUP SCREEN ──
+function KeySetup({onSave}){
+  const [key,setKey]=useState("");
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(150deg,#07111f 0%,#0f2236 40%,#1a3554 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
+      <div style={{width:"100%",maxWidth:460,animation:"slideUp .5s ease"}}>
+        <div style={{textAlign:"center",marginBottom:"2rem"}}>
+          <div style={{background:"linear-gradient(135deg,#c8a96e,#e8c97e)",borderRadius:10,display:"inline-block",padding:"5px 14px",fontSize:".63rem",fontWeight:700,color:"#1e3a5f",letterSpacing:"2px",textTransform:"uppercase",marginBottom:".9rem"}}>CS VASC · QA System</div>
+          <h1 style={{fontFamily:T.d,color:"#fff",fontSize:"2.2rem",margin:"0 0 .4rem"}}>One-Time Setup</h1>
+          <p style={{color:"#475569",fontSize:".84rem"}}>Enter your free Gemini API key to activate AI feedback</p>
+        </div>
+        <Card>
+          <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"12px 14px",marginBottom:"1.2rem"}}>
+            <div style={{fontWeight:700,color:"#065f46",fontSize:".82rem",marginBottom:4}}>✅ How to get your FREE key (2 minutes)</div>
+            <ol style={{color:"#047857",fontSize:".78rem",paddingLeft:"1.2rem",lineHeight:1.8}}>
+              <li>Go to <strong>aistudio.google.com/app/apikey</strong></li>
+              <li>Sign in with Google</li>
+              <li>Click <strong>Create API Key</strong></li>
+              <li>Copy the key and paste it below</li>
+            </ol>
+          </div>
+          <Lbl>Gemini API Key</Lbl>
+          <Inp value={key} onChange={e=>setKey(e.target.value)} placeholder="AIzaSy..." style={{marginBottom:"1rem",fontFamily:"monospace",fontSize:".78rem"}}/>
+          <GoldBtn onClick={()=>{if(key.trim()){localStorage.setItem("qa_gemini_key",key.trim());onSave(key.trim());}}} disabled={!key.trim().startsWith("AIza")} style={{width:"100%",padding:"10px",fontSize:".9rem"}}>
+            Activate &amp; Enter App →
+          </GoldBtn>
+          <div style={{textAlign:"center",color:"#94a3b8",fontSize:".7rem",marginTop:"0.8rem"}}>Key is saved locally on this device only · Never shared</div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT ──
+function App(){
+  const [geminiKey,setGeminiKey]=useState(()=>localStorage.getItem("qa_gemini_key")||"");
+  const [user,setUser]=useState(null);
+  const [users,setUsers]=useState([]);
+  const [assign,setAssign]=useState({});
+  const [ready,setReady]=useState(false);
+
+  useEffect(()=>{if(geminiKey)boot();},[geminiKey]);
+
+  async function boot(){
+    let u=await DB.get("qa_users");if(!u){u=SEED_USERS;await DB.set("qa_users",u);}
+    let a=await DB.get("qa_assign");if(!a){a=SEED_ASSIGN;await DB.set("qa_assign",a);}
+    setUsers(u);setAssign(a);setReady(true);
+  }
+  async function reload(){const u=await DB.get("qa_users");if(u)setUsers(u);const a=await DB.get("qa_assign");if(a)setAssign(a);}
+
+  const wrap=c=><div style={{minHeight:"100vh",background:"linear-gradient(150deg,#07111f 0%,#0f2236 40%,#1a3554 100%)"}}>{c}</div>;
+
+  if(!geminiKey)return <KeySetup onSave={setGeminiKey}/>;
+  if(!ready)return wrap(<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#475569",fontSize:".9rem"}}>Loading...</div>);
+  if(!user)return wrap(<LoginView users={users} onLogin={setUser}/>);
+  if(user.role==="admin")return wrap(<AdminView user={user} users={users} assign={assign} reload={reload} logout={()=>setUser(null)}/>);
+  if(user.role==="supervisor")return wrap(<SupervisorView user={user} users={users} assign={assign} geminiKey={geminiKey} logout={()=>setUser(null)}/>);
+  if(user.role==="agent")return wrap(<AgentView user={user} logout={()=>setUser(null)}/>);
+  return null;
+}
+
+// ── LOGIN ──
+function LoginView({users,onLogin}){
+  const [tab,setTab]=useState("agent");
+  const list=users.filter(u=>u.role===tab);
+  const icons={admin:"⚙️",supervisor:"👨‍💼",agent:"🧑‍💻"};
+  return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",padding:"1rem"}}>
+      <div style={{width:"100%",maxWidth:420,animation:"slideUp .5s ease"}}>
+        <div style={{textAlign:"center",marginBottom:"2rem"}}>
+          <div style={{background:"linear-gradient(135deg,#c8a96e,#e8c97e)",borderRadius:10,display:"inline-block",padding:"5px 14px",fontSize:".63rem",fontWeight:700,color:"#1e3a5f",letterSpacing:"2px",textTransform:"uppercase",marginBottom:".9rem"}}>CS VASC · QA System</div>
+          <h1 style={{fontFamily:T.d,color:"#fff",fontSize:"2.4rem",margin:"0 0 .4rem"}}>QA Feedback Studio</h1>
+          <p style={{color:"#475569",fontSize:".84rem"}}>Select your role and name to continue</p>
+        </div>
+        <Card>
+          <div style={{display:"flex",gap:4,background:"#f1f5f9",borderRadius:10,padding:4,marginBottom:"1.4rem"}}>
+            {["agent","supervisor","admin"].map(r=><button key={r} onClick={()=>setTab(r)} style={{flex:1,padding:7,borderRadius:7,border:"none",background:tab===r?"#1e3a5f":"transparent",color:tab===r?"#fff":"#64748b",fontWeight:600,fontSize:".76rem",cursor:"pointer",textTransform:"capitalize",transition:"all .2s"}}>{r}</button>)}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {list.length===0?<div style={{textAlign:"center",color:"#94a3b8",padding:"2rem 0",fontSize:".82rem"}}>No {tab}s yet.</div>
+              :list.map(u=><button key={u.id} onClick={()=>onLogin(u)} style={{padding:"12px 16px",borderRadius:12,border:"1.5px solid #e2e8f0",background:"#f8fafc",color:"#1e293b",fontWeight:600,fontSize:".88rem",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:10,transition:"all .15s"}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor="#c8a96e";e.currentTarget.style.background="#fffbf0";}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor="#e2e8f0";e.currentTarget.style.background="#f8fafc";}}>
+                {icons[u.role]} {u.name}
+              </button>)
+            }
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ── ADMIN ──
+function AdminView({user,users,assign,reload,logout}){
+  const [tab,setTab]=useState("users");
+  const [newName,setNewName]=useState("");const [newRole,setNewRole]=useState("agent");
+  const [selSup,setSelSup]=useState("");const [selAgt,setSelAgt]=useState("");
+  const [toast,setToast]=useState("");
+  const sups=users.filter(u=>u.role==="supervisor");
+  const agents=users.filter(u=>u.role==="agent");
+  const getName=id=>users.find(u=>u.id===id)?.name||id;
+  const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(""),3000);};
+  async function addUser(){if(!newName.trim())return;const updated=[...users,{id:uid(),name:newName.trim(),role:newRole}];await DB.set("qa_users",updated);await reload();showToast(`✅ ${newName.trim()} added as ${newRole}`);setNewName("");}
+  async function removeUser(id){const updated=users.filter(u=>u.id!==id);await DB.set("qa_users",updated);const a={...assign};delete a[id];Object.keys(a).forEach(k=>{a[k]=a[k].filter(x=>x!==id);});await DB.set("qa_assign",a);await reload();showToast("🗑️ Removed");}
+  async function assignAgent(){if(!selSup||!selAgt)return;const a={...assign};if(!a[selSup])a[selSup]=[];if(!a[selSup].includes(selAgt))a[selSup]=[...a[selSup],selAgt];await DB.set("qa_assign",a);await reload();showToast("✅ Assigned");}
+  async function unassign(sid,aid){const a={...assign};if(a[sid])a[sid]=a[sid].filter(x=>x!==aid);await DB.set("qa_assign",a);await reload();}
+  return(
+    <>
+      <TopBar title="Admin Panel" subtitle="Manage users & assignments" user={user} onLogout={logout}/>
+      <div style={{maxWidth:780,margin:"0 auto",padding:"1.4rem"}}>
+        {toast&&<div style={{background:"rgba(16,185,129,.15)",border:"1px solid #10b981",borderRadius:10,padding:"10px 16px",color:"#10b981",marginBottom:"1rem",fontSize:".82rem"}}>{toast}</div>}
+        <Tabs tabs={[["users","👥 Users"],["assign","🔗 Assignments"]]} active={tab} onChange={setTab}/>
+        {tab==="users"&&(
+          <>
+            <Card style={{marginBottom:"1rem"}}>
+              <STitle>Add New User</STitle>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <div style={{flex:2,minWidth:160}}><Lbl>Full Name</Lbl><Inp value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Ravi Kumar" onKeyDown={e=>e.key==="Enter"&&addUser()}/></div>
+                <div style={{flex:1,minWidth:120}}><Lbl>Role</Lbl><Sel value={newRole} onChange={e=>setNewRole(e.target.value)}><option value="agent">Agent</option><option value="supervisor">Supervisor</option><option value="admin">Admin</option></Sel></div>
+                <div style={{display:"flex",alignItems:"flex-end"}}><GoldBtn onClick={addUser}>+ Add</GoldBtn></div>
+              </div>
+            </Card>
+            <Card>
+              <STitle sub={`${users.length} total`}>All Users</STitle>
+              {["admin","supervisor","agent"].map(role=>{
+                const g=users.filter(u=>u.role===role);if(!g.length)return null;
+                return(<div key={role} style={{marginBottom:"1.1rem"}}>
+                  <div style={{color:"#94a3b8",fontSize:".66rem",fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",marginBottom:6}}>{role}s ({g.length})</div>
+                  {g.map(u=><div key={u.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:"#f8fafc",borderRadius:9,marginBottom:4}}>
+                    <span style={{fontWeight:500,color:"#1e293b",fontSize:".86rem"}}>{role==="admin"?"⚙️":role==="supervisor"?"👨‍💼":"🧑‍💻"} {u.name}</span>
+                    {u.id!=="u_admin"&&<button onClick={()=>removeUser(u.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:".72rem"}}>Remove</button>}
+                  </div>)}
+                </div>);
+              })}
+            </Card>
+          </>
+        )}
+        {tab==="assign"&&(
+          <>
+            <Card style={{marginBottom:"1rem"}}>
+              <STitle>Assign Agent to Supervisor</STitle>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+                <div style={{flex:1,minWidth:150}}><Lbl>Supervisor</Lbl><Sel value={selSup} onChange={e=>setSelSup(e.target.value)}><option value="">Select...</option>{sups.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</Sel></div>
+                <div style={{flex:1,minWidth:150}}><Lbl>Agent</Lbl><Sel value={selAgt} onChange={e=>setSelAgt(e.target.value)}><option value="">Select...</option>{agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Sel></div>
+                <GoldBtn onClick={assignAgent} disabled={!selSup||!selAgt}>Assign →</GoldBtn>
+              </div>
+            </Card>
+            <Card>
+              <STitle>Assignments</STitle>
+              {sups.map(s=>{
+                const aIds=assign[s.id]||[];
+                return(<div key={s.id} style={{marginBottom:"1.2rem"}}>
+                  <div style={{fontWeight:700,color:"#1e3a5f",fontSize:".88rem",marginBottom:6}}>👨‍💼 {s.name}</div>
+                  {aIds.length===0?<div style={{color:"#94a3b8",fontSize:".76rem",paddingLeft:8}}>No agents assigned</div>
+                    :aIds.map(aid=><div key={aid} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 11px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,marginBottom:4}}>
+                      <span style={{fontSize:".82rem",color:"#065f46"}}>🧑‍💻 {getName(aid)}</span>
+                      <button onClick={()=>unassign(s.id,aid)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:".72rem"}}>Unassign</button>
+                    </div>)
+                  }
+                </div>);
+              })}
+            </Card>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── SUPERVISOR ──
+function SupervisorView({user,users,assign,geminiKey,logout}){
+  const [tab,setTab]=useState("dashboard");
+  const [selAgt,setSelAgt]=useState(null);
+  const [contact,setContact]=useState("call");
+  const [evalDate,setEvalDate]=useState("");
+  const [scores,setScores]=useState({});
+  const [notes,setNotes]=useState({});
+  const [openN,setOpenN]=useState({});
+  const [generating,setGenerating]=useState(false);
+  const [sent,setSent]=useState(false);
+  const [history,setHistory]=useState([]);
+  const [agentEvals,setAgentEvals]=useState({});
+
+  const myIds=assign[user.id]||[];
+  const myAgents=users.filter(u=>myIds.includes(u.id));
+  const scored=Object.keys(scores).length;
+  const passed=Object.values(scores).filter(v=>v==="pass").length;
+  const failed=Object.values(scores).filter(v=>v==="fail").length;
+  const partial=Object.values(scores).filter(v=>v==="partial").length;
+  const qs=calcQS(scores);
+  const canSend=selAgt&&scored===PARAMS.length&&!generating;
+
+  useEffect(()=>{loadAll();},[]);
+
+  async function loadAll(){
+    const h=await DB.get(`qa_sent_${user.id}`)||[];setHistory(h);
+    const ev={};
+    for(const a of myAgents){const inbox=await DB.get(`qa_inbox_${a.id}`)||[];ev[a.id]=inbox.filter(f=>f.status==="complete"||f.status==="reflected");}
+    setAgentEvals(ev);
+  }
+  function resetEval(){setScores({});setNotes({});setOpenN({});setSent(false);setSelAgt(null);setEvalDate("");setContact("call");}
+
+  async function sendFeedback(){
+    if(!canSend)return;
+    setGenerating(true);
+    const summary=PARAMS.map(p=>{const s=scores[p.id]||"not scored";const n=notes[p.id]?` (Note: ${notes[p.id]})`:"";return `${p.label}: ${s.toUpperCase()}${n}`;}).join("\n");
+    const prompt=`You are a QA coach. Return ONLY raw JSON, no markdown, no code blocks.
+Agent: ${selAgt.name}, Contact: ${contact}, Date: ${evalDate||new Date().toLocaleDateString("en-IN")}, Score: ${qs}%, Supervisor: ${user.name}
+Parameters:\n${summary}
+Return exactly: {"sections":[{"title":"Overall Performance Summary","content":"2-3 sentence summary."},{"title":"What You Did Well","content":"Specific praise per passed parameter."},{"title":"Areas to Work On","content":"Per failed/partial: what went wrong, why it matters, corrective action. Closure must use: Have I answered all your questions today?"},{"title":"Your Action Items","content":"• action one\n• action two\n• action three\n• action four"},{"title":"A Note From Your Supervisor","content":"Short warm note from ${user.name} to ${selAgt.name}."}]}`;
+    try{
+      const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${geminiKey}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:1000,temperature:0.7}})});
+      const data=await res.json();
+      const raw=data.candidates?.[0]?.content?.parts?.[0]?.text||"{}";
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      const fbId=uid();
+      const fb={id:fbId,agentId:selAgt.id,agentName:selAgt.name,supervisorId:user.id,supervisorName:user.name,contact,date:evalDate||new Date().toLocaleDateString("en-IN"),scores,qs,passed,failed,partial,sentAt:Date.now(),sections:parsed.sections.map((s,i)=>({...s,id:`s${i}`,acknowledged:false})),currentSection:0,status:"pending"};
+      const inbox=await DB.get(`qa_inbox_${selAgt.id}`)||[];inbox.unshift(fb);await DB.set(`qa_inbox_${selAgt.id}`,inbox);
+      const sentList=await DB.get(`qa_sent_${user.id}`)||[];sentList.unshift({id:fbId,agentId:selAgt.id,agentName:selAgt.name,contact,date:fb.date,qs,status:"pending",sentAt:fb.sentAt,sections:fb.sections.length});await DB.set(`qa_sent_${user.id}`,sentList);
+      setSent(true);await loadAll();
+    }catch(e){alert("Error: "+e.message);}
+    setGenerating(false);
+  }
+
+  const teamTrends=myAgents.map(a=>{const evals=agentEvals[a.id]||[];return{agent:a,flags:detectTrends(evals),latestQS:evals[0]?.qs??null,evals};});
+  const paramFailCounts={};PARAMS.forEach(p=>{paramFailCounts[p.id]=0;});
+  myAgents.forEach(a=>{(agentEvals[a.id]||[]).slice(0,5).forEach(e=>{PARAMS.forEach(p=>{if(e.scores&&(e.scores[p.id]==="fail"||e.scores[p.id]==="partial"))paramFailCounts[p.id]++;});});});
+  const maxFail=Math.max(...Object.values(paramFailCounts),1);
+
+  return(
+    <>
+      <TopBar title="Supervisor Panel" subtitle={`${myAgents.length} agents`} user={user} onLogout={logout}/>
+      <div style={{maxWidth:900,margin:"0 auto",padding:"1.4rem"}}>
+        <Tabs tabs={[["dashboard","📊 Dashboard"],["eval","✏️ New Eval"],["history","📋 History"]]} active={tab} onChange={setTab}/>
+
+        {tab==="dashboard"&&(
+          <>
+            <Card style={{marginBottom:"1rem"}}>
+              <STitle sub="Latest QA score per agent">Team Health Overview</STitle>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10}}>
+                {teamTrends.map(({agent,latestQS,flags,evals})=>{
+                  const hasFlags=flags.length>0;const c=latestQS!==null?qs2c(latestQS):"#64748b";const bg=latestQS!==null?qs2bg(latestQS):"#f3f4f6";
+                  const avgQS=evals.length?Math.round(evals.reduce((s,e)=>s+e.qs,0)/evals.length):null;
+                  return(<div key={agent.id} style={{background:bg,border:`1.5px solid ${c}44`,borderRadius:14,padding:"1rem .8rem",textAlign:"center",position:"relative"}}>
+                    {hasFlags&&<div style={{position:"absolute",top:8,right:8,width:8,height:8,borderRadius:"50%",background:"#ef4444",boxShadow:"0 0 0 3px rgba(239,68,68,.25)"}}/>}
+                    <div style={{fontSize:"1.6rem",marginBottom:4}}>🧑‍💻</div>
+                    <div style={{fontWeight:700,color:"#1e293b",fontSize:".82rem"}}>{agent.name}</div>
+                    {latestQS!==null?<><div style={{color:c,fontSize:"1.5rem",fontFamily:T.d,fontWeight:700,lineHeight:1}}>{latestQS}%</div><div style={{color:c,fontSize:".62rem",fontWeight:700}}>{qs2l(latestQS)}</div>{avgQS!==null&&<div style={{color:"#94a3b8",fontSize:".62rem",marginTop:2}}>avg {avgQS}%</div>}</>:<div style={{color:"#94a3b8",fontSize:".72rem",marginTop:4}}>No evals yet</div>}
+                    {hasFlags&&<div style={{marginTop:5,color:"#ef4444",fontSize:".62rem",fontWeight:700}}>⚠️ {flags.length} flag{flags.length>1?"s":""}</div>}
+                  </div>);
+                })}
+              </div>
+            </Card>
+            <Card style={{marginBottom:"1rem"}}>
+              <STitle sub="Which parameters fail most across your team">Parameter Heatmap</STitle>
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {PARAMS.map(p=>{const count=paramFailCounts[p.id];const pct=Math.round((count/maxFail)*100);const col=pct>66?"#ef4444":pct>33?"#f59e0b":"#10b981";
+                  return(<div key={p.id} style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{width:26,textAlign:"center",fontSize:".9rem"}}>{p.icon}</div>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                        <span style={{fontSize:".76rem",color:"#475569",fontWeight:500}}>{p.label}</span>
+                        <span style={{fontSize:".72rem",color:col,fontWeight:700}}>{count} fail{count!==1?"s":""}</span>
+                      </div>
+                      <div style={{height:7,background:"#e2e8f0",borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",width:`${pct||2}%`,background:`linear-gradient(90deg,${col},${col}aa)`,borderRadius:4,transition:"width .5s"}}/></div>
+                    </div>
+                  </div>);
+                })}
+              </div>
+            </Card>
+            {teamTrends.some(t=>t.flags.length>0)&&(
+              <Card>
+                <STitle sub="Agents with repeated failures">⚠️ Coaching Flags</STitle>
+                {teamTrends.filter(t=>t.flags.length>0).map(({agent,flags})=>(
+                  <div key={agent.id} style={{marginBottom:12,padding:"12px 14px",background:"#fff5f5",border:"1.5px solid #fecaca",borderRadius:12}}>
+                    <div style={{fontWeight:700,color:"#991b1b",fontSize:".86rem",marginBottom:6}}>🧑‍💻 {agent.name}</div>
+                    {flags.map((f,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <span>{f.param.icon}</span>
+                      <span style={{fontSize:".78rem",color:"#7f1d1d"}}>{f.param.label} — <strong>{f.count}</strong> of last {f.total} evals</span>
+                      <span style={{background:"#ef4444",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:".62rem",fontWeight:700,marginLeft:"auto"}}>COACH NOW</span>
+                    </div>)}
+                  </div>
+                ))}
+              </Card>
+            )}
+          </>
+        )}
+
+        {tab==="eval"&&(
+          <>
+            {sent?(
+              <div style={{textAlign:"center",padding:"4rem 1rem",animation:"slideUp .4s ease"}}>
+                <div style={{fontSize:"3rem",marginBottom:"1rem"}}>📤</div>
+                <h2 style={{fontFamily:T.d,color:"#fff",fontSize:"1.8rem",margin:"0 0 .6rem"}}>Feedback Sent!</h2>
+                <p style={{color:"#64748b",marginBottom:"1.5rem",fontSize:".88rem"}}>{selAgt?.name} will receive section-by-section notifications.</p>
+                <GoldBtn onClick={resetEval} style={{padding:"10px 28px"}}>+ New Evaluation</GoldBtn>
+              </div>
+            ):(
+              <>
+                <Card style={{marginBottom:".9rem"}}>
+                  <STitle>Evaluation Setup</STitle>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:".8rem"}}>
+                    <div><Lbl>Agent *</Lbl><Sel value={selAgt?.id||""} onChange={e=>setSelAgt(myAgents.find(a=>a.id===e.target.value)||null)}><option value="">-- Select Agent --</option>{myAgents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Sel></div>
+                    <div><Lbl>Contact Type</Lbl><div style={{display:"flex",gap:4}}>{CONTACT_TYPES.map(c=><button key={c.id} onClick={()=>setContact(c.id)} style={{flex:1,padding:"9px 4px",borderRadius:8,border:"1.5px solid",borderColor:contact===c.id?"#c8a96e":"#e2e8f0",background:contact===c.id?"#fffbf0":"#f8fafc",color:contact===c.id?"#92400e":"#94a3b8",fontWeight:600,fontSize:".66rem",cursor:"pointer"}}>{c.label}</button>)}</div></div>
+                    <div><Lbl>Date</Lbl><Inp type="date" value={evalDate} onChange={e=>setEvalDate(e.target.value)}/></div>
+                  </div>
+                </Card>
+                {scored>0&&<div style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:13,padding:".9rem 1.3rem",marginBottom:".9rem",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div><div style={{color:"#475569",fontSize:".65rem",textTransform:"uppercase",letterSpacing:"1px"}}>Live Score</div><div style={{color:qs2c(qs),fontSize:"2rem",fontFamily:T.d,fontWeight:700,lineHeight:1}}>{qs}<span style={{fontSize:"1rem"}}>%</span></div></div>
+                  <div style={{display:"flex",gap:"1.2rem"}}>{[["PASS",passed,"#10b981"],["PART",partial,"#f59e0b"],["FAIL",failed,"#ef4444"]].map(([l,v,c])=><div key={l} style={{textAlign:"center"}}><div style={{color:c,fontWeight:700}}>{v}</div><div style={{color:"#334155",fontSize:".6rem"}}>{l}</div></div>)}</div>
+                </div>}
+                <Card style={{marginBottom:".9rem"}}>
+                  <STitle sub="Score each quality parameter">QA Parameters</STitle>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {PARAMS.map(p=>{const sel=scores[p.id];const opt=SCORE_OPTS.find(o=>o.v===sel);
+                      return(<div key={p.id} style={{background:opt?opt.bg:"#f9fafb",border:`1px solid ${opt?opt.bdr:"#e5e7eb"}`,borderRadius:11,padding:".75rem 1rem",transition:"all .2s"}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:".5rem",flexWrap:"wrap"}}>
+                          <div style={{flex:1}}><div style={{fontWeight:600,color:"#1e293b",fontSize:".84rem"}}>{p.icon} {p.label}</div><div style={{color:"#9ca3af",fontSize:".68rem"}}>{p.desc}</div></div>
+                          <div style={{display:"flex",gap:4}}>{SCORE_OPTS.map(o=><button key={o.v} onClick={()=>setScores(s=>({...s,[p.id]:o.v}))} style={{padding:"5px 10px",borderRadius:7,border:"1.5px solid",borderColor:sel===o.v?o.c:"#e2e8f0",background:sel===o.v?o.c:"#fff",color:sel===o.v?"#fff":"#94a3b8",fontWeight:600,fontSize:".7rem",cursor:"pointer",transition:"all .15s"}}>{o.l}</button>)}</div>
+                        </div>
+                        {sel&&sel!=="na"&&<div style={{marginTop:5}}><button onClick={()=>setOpenN(n=>({...n,[p.id]:!n[p.id]}))} style={{background:"none",border:"none",color:"#9ca3af",fontSize:".67rem",cursor:"pointer",padding:0}}>{openN[p.id]?"▲ hide note":"▼ add note"}</button>{openN[p.id]&&<textarea value={notes[p.id]||""} onChange={e=>setNotes(n=>({...n,[p.id]:e.target.value}))} placeholder="Observation..." rows={2} style={{width:"100%",marginTop:4,border:"1px solid #e2e8f0",borderRadius:7,padding:"7px 9px",fontSize:".78rem",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>}</div>}
+                      </div>);
+                    })}
+                  </div>
+                </Card>
+                <button onClick={sendFeedback} disabled={!canSend} style={{width:"100%",padding:"1rem",borderRadius:13,border:"none",background:canSend?"linear-gradient(135deg,#c8a96e,#e8c97e)":"rgba(255,255,255,.07)",color:canSend?"#1e3a5f":"#475569",fontWeight:700,fontSize:".95rem",cursor:canSend?"pointer":"not-allowed",boxShadow:canSend?"0 6px 24px rgba(200,169,110,.35)":"none",transition:"all .2s"}}>
+                  {generating?"⏳ Generating AI Feedback...":!selAgt?"Select an Agent First":scored<PARAMS.length?`Score All (${scored}/10 done)`:`📤 Send Feedback to ${selAgt.name}`}
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {tab==="history"&&(
+          <Card>
+            <STitle sub={`${history.length} sent`}>Sent History</STitle>
+            {history.length===0?<div style={{color:"#94a3b8",textAlign:"center",padding:"2rem 0",fontSize:".84rem"}}>No evaluations sent yet.</div>
+              :history.map(h=><SentItem key={h.id} item={h}/>)
+            }
+          </Card>
+        )}
+      </div>
+    </>
+  );
+}
+
+function SentItem({item}){
+  const [liveStatus,setLiveStatus]=useState(item.status);
+  useEffect(()=>{
+    const poll=async()=>{const inbox=await DB.get(`qa_inbox_${item.agentId}`)||[];const fb=inbox.find(f=>f.id===item.id);if(fb)setLiveStatus(fb.status);};
+    poll();const t=setInterval(poll,3000);return()=>clearInterval(t);
+  },[item.id]);
+  const sc=liveStatus==="complete"?"#10b981":"#f59e0b";
+  return(
+    <div style={{padding:"10px 14px",background:"#f8fafc",borderRadius:11,marginBottom:7,border:"1px solid #e2e8f0"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".4rem"}}>
+        <div><div style={{fontWeight:600,color:"#1e293b",fontSize:".86rem"}}>🧑‍💻 {item.agentName}</div><div style={{color:"#94a3b8",fontSize:".7rem"}}>{item.contact} · {item.date} · {item.qs}%</div></div>
+        <div style={{background:liveStatus==="complete"?"#d1fae5":"#fef3c7",color:sc,borderRadius:8,padding:"4px 10px",fontSize:".7rem",fontWeight:700}}>{liveStatus==="complete"?"✅ Acknowledged":"⏳ Pending"}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── AGENT ──
+function AgentView({user,logout}){
+  const [tab,setTab]=useState("feedback");
+  const [inbox,setInbox]=useState([]);
+  const [activeFb,setActiveFb]=useState(null);
+  const [alertPulse,setAlertPulse]=useState(false);
+  const [badges,setBadges]=useState([]);
+  const [leaderboard,setLeaderboard]=useState([]);
+  const [reflection,setReflection]=useState(null);
+
+  useEffect(()=>{loadAll();const t=setInterval(loadAll,2500);return()=>clearInterval(t);},[]);
+
+  async function loadAll(){
+    const data=await DB.get(`qa_inbox_${user.id}`)||[];setInbox(data);
+    const pending=data.find(f=>f.status!=="complete"&&f.status!=="reflected");
+    const completed=data.filter(f=>f.status==="complete"||f.status==="reflected");
+    if(pending){setActiveFb(pending);setAlertPulse(true);}else{setActiveFb(null);setAlertPulse(false);}
+    setBadges(calcBadges(completed.map(e=>({...e,ackTime:e.ackDuration}))));
+    const users2=await DB.get("qa_users")||[];
+    const agents=users2.filter(u=>u.role==="agent");
+    const lb=[];
+    for(const a of agents){const ai=await DB.get(`qa_inbox_${a.id}`)||[];const done=ai.filter(f=>f.status==="complete"||f.status==="reflected");if(done.length>0){const avg=Math.round(done.reduce((s,e)=>s+e.qs,0)/done.length);lb.push({name:a.name,avg,count:done.length,isMe:a.id===user.id});}}
+    lb.sort((a,b)=>b.avg-a.avg);setLeaderboard(lb);
+  }
+
+  async function acknowledge(fbId,secId){
+    const data=await DB.get(`qa_inbox_${user.id}`)||[];
+    const fb=data.find(f=>f.id===fbId);if(!fb)return;
+    const si=fb.sections.findIndex(s=>s.id===secId);if(si===-1)return;
+    fb.sections[si].acknowledged=true;fb.sections[si].acknowledgedAt=Date.now();
+    const next=fb.sections.findIndex(s=>!s.acknowledged);
+    if(next===-1){fb.status="complete";fb.currentSection=fb.sections.length;fb.ackDuration=Math.round((Date.now()-fb.sentAt)/60000);setReflection({fbId,rating:0,comment:"",submitted:false});}
+    else{fb.currentSection=next;fb.status="partial";}
+    const updated=data.map(f=>f.id===fbId?fb:f);await DB.set(`qa_inbox_${user.id}`,updated);
+    const sentKey=`qa_sent_${fb.supervisorId}`;const sent=await DB.get(sentKey)||[];await DB.set(sentKey,sent.map(s=>s.id===fbId?{...s,status:fb.status}:s));
+    await loadAll();
+  }
+
+  async function submitReflection(fbId,rating,comment){
+    const data=await DB.get(`qa_inbox_${user.id}`)||[];const fb=data.find(f=>f.id===fbId);if(!fb)return;
+    fb.reflection={rating,comment,submittedAt:Date.now()};fb.status="reflected";
+    await DB.set(`qa_inbox_${user.id}`,data.map(f=>f.id===fbId?fb:f));setReflection(null);await loadAll();
+  }
+
+  const pending=inbox.filter(f=>f.status!=="complete"&&f.status!=="reflected");
+  const completed=inbox.filter(f=>f.status==="complete"||f.status==="reflected");
+  const currentSec=activeFb?activeFb.sections[activeFb.currentSection]:null;
+  const progress=activeFb?Math.round((activeFb.currentSection/activeFb.sections.length)*100):0;
+  const myBadgeDefs=BADGE_DEFS.filter(b=>badges.includes(b.id));
+
+  return(
+    <>
+      <TopBar title="My QA Feedback" subtitle={pending.length>0?`${pending.length} pending`:"All caught up ✓"} user={user} onLogout={logout}
+        badge={pending.length>0?<div style={{position:"relative",display:"inline-flex"}}><div style={{background:"#ef4444",color:"#fff",borderRadius:"50%",width:20,height:20,fontSize:".65rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{pending.length}</div><div style={{position:"absolute",inset:0,borderRadius:"50%",background:"#ef4444",animation:"ping 1.2s infinite"}}/></div>:null}
+      />
+      <div style={{maxWidth:680,margin:"0 auto",padding:"1.4rem"}}>
+        <Tabs tabs={[["feedback","📬 Feedback"],["badges","🏅 Badges"],["leaderboard","🏆 Leaderboard"]]} active={tab} onChange={setTab}/>
+
+        {tab==="feedback"&&(
+          <>
+            {reflection&&!reflection.submitted&&(
+              <div style={{background:"rgba(255,255,255,.97)",borderRadius:20,padding:"1.5rem",marginBottom:"1.2rem",boxShadow:"0 20px 60px rgba(0,0,0,.4)",animation:"popIn .4s ease",border:"2px solid #c8a96e"}}>
+                <div style={{textAlign:"center",marginBottom:"1.2rem"}}>
+                  <div style={{fontSize:"2rem",marginBottom:".4rem"}}>🤔</div>
+                  <h3 style={{fontFamily:T.d,color:"#1e3a5f",fontSize:"1.15rem",margin:"0 0 .3rem"}}>How fair was this evaluation?</h3>
+                  <p style={{color:"#94a3b8",fontSize:".78rem",margin:0}}>Your honest rating helps improve the QA process</p>
+                </div>
+                <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:"1rem"}}>
+                  {[1,2,3,4,5].map(s=><button key={s} onClick={()=>setReflection(r=>({...r,rating:s}))} style={{fontSize:"1.8rem",background:"none",border:"none",cursor:"pointer",opacity:reflection.rating>=s?1:.3,transform:reflection.rating>=s?"scale(1.15)":"scale(1)",transition:"all .2s"}}>⭐</button>)}
+                </div>
+                <div style={{marginBottom:"1rem"}}>
+                  <Lbl>Any comments? (optional)</Lbl>
+                  <textarea value={reflection.comment} onChange={e=>setReflection(r=>({...r,comment:e.target.value}))} placeholder="e.g. I agree with the feedback..." rows={3} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:9,padding:"9px 11px",fontSize:".84rem",outline:"none",boxSizing:"border-box",resize:"vertical"}}/>
+                </div>
+                <GoldBtn onClick={()=>{if(reflection.rating>0)submitReflection(reflection.fbId,reflection.rating,reflection.comment);}} disabled={reflection.rating===0} style={{width:"100%",padding:"10px",fontSize:".9rem"}}>Submit Reflection →</GoldBtn>
+              </div>
+            )}
+            {activeFb&&currentSec&&(
+              <div style={{marginBottom:"1.4rem",borderRadius:20,overflow:"hidden",background:"#fff",boxShadow:"0 20px 60px rgba(0,0,0,.4)",border:`2px solid ${alertPulse?"#ef4444":"#c8a96e"}`,animation:"pulseRed 2s infinite"}}>
+                <div style={{background:alertPulse?"linear-gradient(135deg,#dc2626,#ef4444)":"linear-gradient(135deg,#1e3a5f,#2d5a8e)",padding:".9rem 1.3rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{position:"relative"}}><div style={{width:9,height:9,borderRadius:"50%",background:"#fff"}}/><div style={{position:"absolute",inset:0,borderRadius:"50%",background:"#fff",animation:"ping 1s infinite"}}/></div>
+                    <div><div style={{color:"#fff",fontWeight:700,fontSize:".9rem"}}>📬 New QA Feedback</div><div style={{color:"rgba(255,255,255,.6)",fontSize:".7rem"}}>From {activeFb.supervisorName} · {activeFb.contact} · {activeFb.date}</div></div>
+                  </div>
+                  <div style={{background:"rgba(255,255,255,.18)",borderRadius:9,padding:"4px 12px",color:"#fff",fontWeight:700,fontSize:".88rem"}}>{activeFb.qs}%</div>
+                </div>
+                <div style={{padding:".7rem 1.3rem",background:"#f8fafc",borderBottom:"1px solid #e2e8f0",display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{color:"#64748b",fontSize:".7rem",fontWeight:600,whiteSpace:"nowrap"}}>Section {activeFb.currentSection+1} of {activeFb.sections.length}</span>
+                  <div style={{flex:1,height:5,background:"#e2e8f0",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",background:"linear-gradient(90deg,#c8a96e,#e8c97e)",width:`${progress}%`,borderRadius:3,transition:"width .5s"}}/></div>
+                  <span style={{color:"#94a3b8",fontSize:".7rem"}}>{progress}%</span>
+                </div>
+                <div style={{padding:"1.4rem 1.5rem 1rem"}}>
+                  <h3 style={{fontFamily:T.d,color:"#1e3a5f",fontSize:"1.15rem",margin:"0 0 .8rem",borderLeft:"3px solid #c8a96e",paddingLeft:10,lineHeight:1.3}}>{currentSec.title}</h3>
+                  <div style={{color:"#374151",lineHeight:"1.75",fontSize:".87rem"}}>
+                    {currentSec.content.split("\n").map((line,i)=>
+                      line.startsWith("•")?<div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:"#c8a96e",flexShrink:0}}>•</span><span>{line.slice(1).trim()}</span></div>
+                      :line.trim()?<p key={i} style={{margin:"0 0 5px"}}>{line}</p>:<br key={i}/>
+                    )}
+                  </div>
+                </div>
+                <div style={{padding:"0 1.5rem 1.5rem"}}>
+                  <button onClick={()=>acknowledge(activeFb.id,currentSec.id)} style={{width:"100%",padding:".9rem",borderRadius:12,border:"none",background:"linear-gradient(135deg,#1e3a5f,#2d5a8e)",color:"#fff",fontWeight:700,fontSize:".9rem",cursor:"pointer"}}>
+                    ✓ Understood — {activeFb.currentSection+1<activeFb.sections.length?`Next (${activeFb.currentSection+2}/${activeFb.sections.length}) →`:"Complete ✓"}
+                  </button>
+                  <div style={{textAlign:"center",color:"#ef4444",fontSize:".68rem",marginTop:6,fontWeight:600}}>⚠️ Notifications repeat until all sections are acknowledged</div>
+                </div>
+              </div>
+            )}
+            {!activeFb&&!reflection&&<div style={{background:"rgba(255,255,255,.04)",borderRadius:16,padding:"2.5rem",textAlign:"center",marginBottom:"1.4rem"}}><div style={{fontSize:"2.2rem",marginBottom:".8rem"}}>✅</div><div style={{color:"#94a3b8",fontFamily:T.d,fontSize:"1.1rem"}}>All caught up!</div><div style={{color:"#475569",fontSize:".78rem",marginTop:4}}>No pending feedback right now.</div></div>}
+            {activeFb&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:"1.2rem"}}>{PARAMS.map(p=>{const s=activeFb.scores[p.id];const opt=SCORE_OPTS.find(o=>o.v===s);if(!opt)return null;return<div key={p.id} style={{background:opt.bg,border:`1px solid ${opt.bdr}`,borderRadius:8,padding:"4px 9px",fontSize:".67rem",fontWeight:600,color:opt.dk}}>{p.icon} {p.label.split(" ")[0]} · {opt.l}</div>;})}</div>}
+            {completed.length>0&&<Card><STitle sub={`${completed.length} completed`}>Past Feedback</STitle>{completed.map(f=><PastFeedback key={f.id} fb={f}/>)}</Card>}
+          </>
+        )}
+
+        {tab==="badges"&&(
+          <>
+            <Card style={{marginBottom:"1rem"}}>
+              <STitle sub={`${myBadgeDefs.length} of ${BADGE_DEFS.length} earned`}>My Badges</STitle>
+              {myBadgeDefs.length===0?<div style={{textAlign:"center",padding:"1.5rem 0",color:"#94a3b8",fontSize:".84rem"}}>Complete your first evaluation to earn badges!</div>
+                :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10}}>
+                  {myBadgeDefs.map(b=><div key={b.id} style={{background:"linear-gradient(135deg,#fffbf0,#fff8e7)",border:"1.5px solid #c8a96e",borderRadius:14,padding:"1.1rem .9rem",textAlign:"center",animation:"popIn .4s ease"}}>
+                    <div style={{fontSize:"2rem",marginBottom:6}}>{b.icon}</div>
+                    <div style={{fontWeight:700,color:"#1e3a5f",fontSize:".82rem"}}>{b.label}</div>
+                    <div style={{color:"#92400e",fontSize:".67rem",marginTop:3}}>{b.desc}</div>
+                  </div>)}
+                </div>
+              }
+            </Card>
+            <Card>
+              <STitle sub="Keep working to unlock these">Locked Badges</STitle>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10}}>
+                {BADGE_DEFS.filter(b=>!badges.includes(b.id)).map(b=><div key={b.id} style={{background:"#f1f5f9",border:"1.5px solid #e2e8f0",borderRadius:14,padding:"1.1rem .9rem",textAlign:"center",opacity:.6}}>
+                  <div style={{fontSize:"2rem",marginBottom:6,filter:"grayscale(1)"}}>{b.icon}</div>
+                  <div style={{fontWeight:600,color:"#64748b",fontSize:".82rem"}}>{b.label}</div>
+                  <div style={{color:"#94a3b8",fontSize:".67rem",marginTop:3}}>{b.desc}</div>
+                </div>)}
+              </div>
+            </Card>
+          </>
+        )}
+
+        {tab==="leaderboard"&&(
+          <Card>
+            <STitle sub="Based on average QA score">Team Leaderboard</STitle>
+            {leaderboard.length===0?<div style={{textAlign:"center",padding:"2rem 0",color:"#94a3b8",fontSize:".84rem"}}>No completed evaluations yet.</div>
+              :leaderboard.map((a,i)=>{
+                const medal=i===0?"🥇":i===1?"🥈":i===2?"🥉":"";const c=qs2c(a.avg);const bg=qs2bg(a.avg);
+                return(<div key={a.name} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",background:a.isMe?"linear-gradient(135deg,#fffbf0,#fff8e7)":"#f8fafc",border:`1.5px solid ${a.isMe?"#c8a96e":"#e2e8f0"}`,borderRadius:13,marginBottom:7}}>
+                  <div style={{width:28,textAlign:"center",fontSize:"1.1rem"}}>{medal||<span style={{color:"#94a3b8",fontWeight:700,fontSize:".82rem"}}>#{i+1}</span>}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,color:"#1e293b",fontSize:".88rem"}}>{a.name}{a.isMe&&<span style={{background:"#1e3a5f",color:"#c8a96e",borderRadius:6,padding:"2px 7px",fontSize:".62rem",fontWeight:700,marginLeft:5}}>YOU</span>}</div>
+                    <div style={{color:"#94a3b8",fontSize:".7rem"}}>{a.count} eval{a.count!==1?"s":""}</div>
+                  </div>
+                  <div style={{background:bg,borderRadius:10,padding:"5px 13px",textAlign:"center"}}>
+                    <div style={{color:c,fontWeight:700,fontSize:"1rem",fontFamily:T.d}}>{a.avg}%</div>
+                    <div style={{color:c,fontSize:".6rem",fontWeight:600}}>{qs2l(a.avg)}</div>
+                  </div>
+                </div>);
+              })
+            }
+          </Card>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PastFeedback({fb}){
+  const [open,setOpen]=useState(false);const c=qs2c(fb.qs);
+  return(
+    <div style={{marginBottom:8}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",padding:"10px 14px",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:11,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{textAlign:"left"}}><div style={{fontWeight:600,color:"#1e293b",fontSize:".84rem"}}>📋 {fb.contact} · {fb.date}</div><div style={{color:"#94a3b8",fontSize:".7rem"}}>From {fb.supervisorName}{fb.reflection?` · ⭐ ${fb.reflection.rating}/5`:""}</div></div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{color:c,fontWeight:700,fontSize:".88rem"}}>{fb.qs}%</span><span style={{background:"#d1fae5",color:"#065f46",borderRadius:7,padding:"3px 8px",fontSize:".66rem",fontWeight:700}}>✅</span><span style={{color:"#94a3b8",fontSize:".8rem"}}>{open?"▲":"▼"}</span></div>
+      </button>
+      {open&&<div style={{background:"#fff",border:"1px solid #e2e8f0",borderTop:"none",borderRadius:"0 0 11px 11px",padding:"1.2rem"}}>
+        {fb.sections.map(s=><div key={s.id} style={{marginBottom:"1rem"}}>
+          <h4 style={{fontFamily:T.d,color:"#1e3a5f",fontSize:"1rem",margin:"0 0 .4rem",borderLeft:"3px solid #c8a96e",paddingLeft:8}}>{s.title}</h4>
+          <div style={{color:"#374151",fontSize:".82rem",lineHeight:"1.65"}}>{s.content.split("\n").map((line,i)=>line.startsWith("•")?<div key={i} style={{display:"flex",gap:6,marginBottom:3}}><span style={{color:"#c8a96e"}}>•</span><span>{line.slice(1).trim()}</span></div>:line.trim()?<p key={i} style={{margin:"0 0 3px"}}>{line}</p>:null)}</div>
+        </div>)}
+        {fb.reflection&&<div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,padding:"10px 14px",marginTop:8}}><div style={{fontSize:".72rem",fontWeight:700,color:"#065f46"}}>Your Reflection · {"⭐".repeat(fb.reflection.rating)}</div>{fb.reflection.comment&&<div style={{color:"#374151",fontSize:".8rem",marginTop:4}}>{fb.reflection.comment}</div>}</div>}
+      </div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
